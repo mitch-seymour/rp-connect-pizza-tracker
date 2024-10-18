@@ -15,9 +15,6 @@ Our system will provide real-time tracking for pizza orders, allowing customers 
 By decoupling services with Redpanda, the system scales efficiently and ensures reliable event processing for real-time tracking and notifications.
 
 ## Setup
-First, start Redpanda.
-
-## Setup
 
 First, we need to create a topic to hold all of the order events. The events will look something like this.
 
