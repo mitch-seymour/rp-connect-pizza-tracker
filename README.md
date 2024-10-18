@@ -4,6 +4,19 @@ You just bought a pizza restaurant, nice! You tell people it's because you alway
 
 We won't judge you, but we do want to help you implement an order tracker so you can keep up with the big chains. You're a Redpanda customer so you have access to state of the art streaming tech to build real-time systems. Let's get started.
 
+# Design
+Our system will provide real-time tracking for pizza orders, allowing customers to monitor their order status and track the delivery in real-time. The system follows an event-driven architecture using Redpanda for handling order status updates and real-time delivery tracking.
+
+## Key Features
+- Order Status Updates: As the order progresses (e.g., "Received", "Preparing", "Out for Delivery", "Delivered"), events are published to a Kafka topic, and customers are notified in real-time.
+- Real-Time GPS Tracking: Drivers update their GPS location periodically, which is streamed to the customer app, enabling live delivery tracking.
+- Asynchronous Notifications: A notification service listens for order updates and triggers SMS or push notifications to keep customers informed throughout the process.
+
+By decoupling services with Redpanda, the system scales efficiently and ensures reliable event processing for real-time tracking and notifications.
+
+## Setup
+First, start Redpanda.
+
 ## Setup
 
 First, we need to create a topic to hold all of the order events. The events will look something like this.
@@ -216,3 +229,4 @@ Example response:
   "order_id": 5
 }
 ```
+
