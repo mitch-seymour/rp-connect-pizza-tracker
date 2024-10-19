@@ -1,5 +1,7 @@
 # RP Connect Pizza Tracker
 
+> Work in progress! Started this to answer a question brought up in training and am currently iterating :)
+
 You just bought a pizza restaurant, nice! You tell people it's because you always wanted to feed the hungry, but really, you just like eating obscene amounts of BBQ chicken pizza when no one's looking.
 
 We won't judge you, but we do want to help you implement an order tracker so you can keep up with the big chains. You're a Redpanda customer so you have access to state of the art streaming tech to build real-time systems. Let's get started.
