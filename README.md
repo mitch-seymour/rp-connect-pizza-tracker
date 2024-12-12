@@ -168,10 +168,11 @@ pipeline:
         root = {}
         root.customer_id = this.customer_id
         root.order_id = this.order_id
+        root.order_status = this.order_status
         root.details = this.details
 ```
 
-As you can see, we start by creating an empty document `{}` called `root`. When then transfer the non-sensitive fields (`customer_id`, `order_id`, `details`) from the current document (`this`) to the new document (`root`). Go ahead and replace `connect.yaml` with the following code to see this in action.
+As you can see, we start by creating an empty document `{}` called `root`. When then transfer the non-sensitive fields (`customer_id`, `order_id`, `order_status`, `details`) from the current document (`this`) to the new document (`root`). Go ahead and replace `connect.yaml` with the following code to see this in action.
 
 ```yaml
 input:
@@ -188,6 +189,7 @@ pipeline:
         root = {}
         root.customer_id = this.customer_id
         root.order_id = this.order_id
+        root.order_status = this.order_status
         root.details = this.details
 
 output:
@@ -216,13 +218,112 @@ The output will show records that are cleaner and more privacy-friendly.
 {
   "customer_id": 3,
   "details": "3 meat lovers pizzas",
-  "order_id": 3
+  "order_id": 3,
+  "order_status": "preparing"
 }
 ```
 
-As we've discussed in other Redpanda University courses, this type of operation which operates on a single record at a time is called a **stateless operation**. These are among the simplest and most common processing tasks that you'll see in the wild. Later in this tutorial, we'll take a look at some more complicated **stateful operations**, like aggregating records. However, before we do that, let's explore some more operators.
+As we've discussed in other Redpanda University courses, this type of operation which operates on a single record at a time is called a **stateless operation**. These are among the simplest and most common processing tasks that you'll see in the wild. Later in this tutorial, we'll take a look at some more complicated **stateful operations**, like aggregating records. However, before we do that, let's take a quick look at testing so that we can build confidently.
+
+## Testing
+As you build Redpanda Connect pipelines, it's a good idea to add tests to prevent accidental regressions or bugs in your code. Luckily, unit tests can be written using a simple, declarative syntax, right alongside your YAML definitions. The following example demonstrates a simple test case for the record-scrubbing pipeline we just created:
+
+```yaml
+tests:
+  - name: test record scrubbing
+    environment: {}
+    input_batch:
+      - content: |
+          {
+            "created_at": "2024-12-12T17:25:52.724229Z",
+            "customer_address": "456 Oak Ave",
+            "customer_id": 2,
+            "customer_name": "Jane Smith",
+            "details": "1 pepperoni pizza, 1 veggie pizza",
+            "order_id": 2,
+            "order_status": "delivered"
+          }
+    output_batches:
+      -
+        - json_equals: |
+            {
+              "customer_id": 2,
+              "details": "1 pepperoni pizza, 1 veggie pizza",
+              "order_id": 2,
+              "order_status": "delivered"
+            }
+```
+
+By specifying one or more input records, and then asserting the contents of the output record, we can ensure our code performs the task we expect it to. Go ahead and update your `connect.yaml` with this code, so that the full file looks like this:
+
+```yaml
+input:
+  sql_select:
+    driver: postgres
+    dsn: postgres://root:secret@postgres:5432/root?sslmode=disable
+    table: orders
+    columns: [ '*' ]
+
+# add the pipeline
+pipeline:
+  processors:
+    - bloblang: |
+        root = {}
+        root.customer_id = this.customer_id
+        root.order_id = this.order_id
+        root.order_status = this.order_status
+        root.details = this.details
+
+output:
+  label: "redpanda"
+  kafka:
+    addresses: [ 'redpanda-1:9092']
+    topic: orders
+    key: '${! json("customer_id") }'
+
+tests:
+  - name: test record scrubbing
+    environment: {}
+    input_batch:
+      - content: |
+          {
+            "created_at": "2024-12-12T17:25:52.724229Z",
+            "customer_address": "456 Oak Ave",
+            "customer_id": 2,
+            "customer_name": "Jane Smith",
+            "details": "1 pepperoni pizza, 1 veggie pizza",
+            "order_id": 2,
+            "order_status": "delivered"
+          }
+    output_batches:
+      -
+        - json_equals: |
+            {
+              "customer_id": 2,
+              "details": "1 pepperoni pizza, 1 veggie pizza",
+              "order_id": 2,
+              "order_status": "delivered"
+            }
+```
+
+To run the test, you can use `rpk`. For example, run the following command:
+
+```sh
+rpk connect test /etc/redpanda/connect.yaml
+```
+
+You'll see the following output printed to the screen:
+
+```
+Test '/etc/redpanda/connect.yaml' succeeded
+```
+
+For larger pipelines, you may want to break out your tests into a separate file. This is also supported, and you can find more information in [the official documentation](https://docs.redpanda.com/redpanda-connect/configuration/unit_testing/#writing-a-test).
 
 ## More Operators
+There are many additional ways to transform the data flowing through Redpanda Connect.
+
+
 
 We now have order data flowing through Redpanda thanks to Redpanda Connect, and can finish implementing the order tracking system. Using Redpanda Connect's cache resources, we can turn this stateless application into a stateful one, storing the most recent order status for each customer and triggering a notification when the order is on its way.
 
