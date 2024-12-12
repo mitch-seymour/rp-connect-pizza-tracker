@@ -101,15 +101,13 @@ output:
     key: '${! json("customer_id") }'
 ```
 
-We're using the `customer_id` as the record key (see the last line) since we want all events for a given customer to be ordered.
-
-Now we're cooking with gas! Run the pipeline again:
+We're using the `customer_id` as the record key (see the last line) since we want all events for a given customer to be ordered. To deploy these changes, run the following command:
 
 ```sh
 rpk connect run /etc/redpanda/connect.yaml
 ```
 
-And verify that the data is now in Redpanda. You can do that from the CLI:
+Then, verify that the data is now in Redpanda. You can do that from the CLI:
 
 ```sh
 rpk topic consume orders
@@ -117,9 +115,63 @@ rpk topic consume orders
 
 or from [Redpanda Console](http://localhost:8080/topics/orders).
 
-Looking good! But ah geez, David from the legal team says we shouldn't be copying sensitive data like the customer's address and name to our order tracking system.
+You should see data flowing through Redpanda now. As they say in the pizza industry, "Now we're cooking with gas"!
 
-Let's add a pipeline to clean that up.
+You now know the basics of moving data between various input and output destinations using Redpanda Connect. In other words, the important "Extract" and "Load" steps in your traditional ETL or ELT pipelines.
+
+In the next section, we'll explore one of Redpanda Connect's biggest strengths: its processing layer.
+
+## Processing data with Redpanda Connect
+
+Now that data is flowing through Redpanda, you may have noticed that some sensitive customer information is included in each payload. Namely, the customer's name and address:
+
+```json
+{
+  "created_at": "2024-12-12T17:25:52.724229Z",
+  "customer_address": "456 Oak Ave",
+  "customer_id": 2,
+  "customer_name": "Jane Smith",
+  "details": "1 pepperoni pizza, 1 veggie pizza",
+  "order_id": 2,
+  "order_status": "delivered"
+}
+```
+
+Our order tracking system doesn't actually need this information, so let's add some lightweight stream processing to remove this sensitive information.
+
+Just like pizza, Redpanda Connect is a system of many layers. Sandwiched between input and output configurations, we often use `pipelines` to perform one or more data processing steps. At a high-level, it looks like this:
+
+```yaml
+input:
+  ...
+
+pipeline:
+  processors:
+    ...
+
+output:
+  ...
+```
+
+Within each `pipeline`, we have one or more `processors`, which define what we can actually do with the data. There are nearly [100 processors](https://docs.redpanda.com/redpanda-connect/components/processors/about/), covering a wide range of use cases, from filtering and transforming data, to enriching it with external sources, aggregating records, or even creating [advanced workflows](https://docs.redpanda.com/redpanda-connect/components/processors/workflow/). You are only limited by your imagination.
+
+While covering every processor is not possible in just a short tutorial, we will explore a few powerful options. Perhaps the most flexible and powerful processor is `bloblang`, a dynamic and expressive language for filtering, transforming, and mapping data. With `bloblang`, you can manipulate fields, enrich messages, and even create complex conditional logic, making it an essential tool for customizing pipelines to fit your specific needs.
+
+The core features can be found in [the Redpanda Connect documentation](https://docs.redpanda.com/redpanda-connect/guides/bloblang/about/), but the goal of the `bloblang` processor is to simply map an input document into a new output document. This is perfect for our current use case of cleansing out input record of sensitive information.
+
+The bloblang syntax for creating a new `orders` document with the sensitive information removed is shown here:
+
+```
+pipeline:
+  processors:
+    - bloblang: |
+        root = {}
+        root.customer_id = this.customer_id
+        root.order_id = this.order_id
+        root.details = this.details
+```
+
+As you can see, we start by creating an empty document `{}` called `root`. When then transfer the non-sensitive fields (`customer_id`, `order_id`, `details`) from the current document (`this`) to the new document (`root`). Go ahead and replace `connect.yaml` with the following code to see this in action.
 
 ```yaml
 input:
@@ -146,19 +198,19 @@ output:
     key: '${! json("customer_id") }'
 ```
 
-Run the pipeline again:
+Then, run the pipeline again with the following command:
 
 ```sh
 rpk connect run /etc/redpanda/connect.yaml
 ```
 
-And then verify:
+Finally, verify that the order data has now been scrubbed:
 
 ```
 rpk topic consume orders -f '%v' -n 1 -o -1 | jq '.'
 ```
 
-The records should look better and more privacy-friendly.
+The output will show records that are cleaner and more privacy-friendly.
 
 ```json
 {
@@ -167,6 +219,10 @@ The records should look better and more privacy-friendly.
   "order_id": 3
 }
 ```
+
+As we've discussed in other Redpanda University courses, this type of operation which operates on a single record at a time is called a **stateless operation**. These are among the simplest and most common processing tasks that you'll see in the wild. Later in this tutorial, we'll take a look at some more complicated **stateful operations**, like aggregating records. However, before we do that, let's explore some more operators.
+
+## More Operators
 
 We now have order data flowing through Redpanda thanks to Redpanda Connect, and can finish implementing the order tracking system. Using Redpanda Connect's cache resources, we can turn this stateless application into a stateful one, storing the most recent order status for each customer and triggering a notification when the order is on its way.
 
