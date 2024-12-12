@@ -121,7 +121,7 @@ You now know the basics of moving data between various input and output destinat
 
 In the next section, we'll explore one of Redpanda Connect's biggest strengths: its processing layer.
 
-## Processing data with Redpanda Connect
+## Transforming data with Redpanda Connect
 
 Now that data is flowing through Redpanda, you may have noticed that some sensitive customer information is included in each payload. Namely, the customer's name and address:
 
@@ -161,7 +161,7 @@ The core features can be found in [the Redpanda Connect documentation](https://d
 
 The bloblang syntax for creating a new `orders` document with the sensitive information removed is shown here:
 
-```
+```yaml
 pipeline:
   processors:
     - bloblang: |
@@ -321,7 +321,37 @@ Test '/etc/redpanda/connect.yaml' succeeded
 For larger pipelines, you may want to break out your tests into a separate file. This is also supported, and you can find more information in [the official documentation](https://docs.redpanda.com/redpanda-connect/configuration/unit_testing/#writing-a-test).
 
 ## More Operators
-There are many additional ways to transform the data flowing through Redpanda Connect.
+It may seem like we're hopping around a bit, but the four concepts you've learned so far (inputs, outputs, pipelines, and testing) will allow you to explore the rest of Redpanda Connect's features with ease. The testing piece is especially important as it will allow us to confirm our expectations and assumptions in a quicker iteration loop. This will be useful in the next section as we introduce a more complex feature: notifying customers when their order status changes.
+
+### Stateful Resources
+A key feature of our pizza tracker is its ability to proactively notify customers as their orders progress through various stages. No more anxiously refreshing a browser or hovering over a screen wondering when their extra cheese pizza will show up at the door.
+
+While this may seem like a straightforward feature, implementing it requires leveraging some of the more advanced capabilities of Redpanda Connect.
+
+To meet the requirements, our pizza tracking pipeline needs to accomplish the following:
+
+- For each incoming record, determine if the status of the given order has changed.
+- If the status remains the same, take no action to avoid sending unnecessary notifications.
+- If the status has changed, trigger a notification to the customer. (For now, this will be simulated by logging a message.)
+
+To achieve this, the pipeline must maintain some awareness of previously-seen events. This "awareness" or memory of previously-seen events will make our application **stateful**.
+
+A simple key-value store or cache is well-suited for this purpose. Each time a status update is received, the pipeline will check the cache for the previous status associated with the order ID. If a change is detected, it will log the notification. Additionally, the cache will be updated with the latest status to ensure future records are processed correctly.
+
+Luckily for us, Redpanda Connect includes a `cache` processor and resource to facilitate this. To define a cache resource, you can add the following line to your `connect.yaml` file:
+
+```yaml
+cache_resources:
+  - label: order_cache
+    memory:
+      default_ttl: 1800s
+```
+
+Here, we are choosing an in-memory cache with an 1800s (30 minute) timeout. However, more durable options like Redis, Memcached, and Dynamodb are [also available](https://docs.redpanda.com/redpanda-connect/components/caches/about/). Next, we'll update our pipeline to retrieve and store order statuses within this cache resource.
+
+### Using Caches
+
+
 
 
 
