@@ -520,15 +520,19 @@ pipeline:
             - catch:
               # If the order_id isn't in the cache, set the previous status to "none"
               - mapping: |
-                  "pending"
+                  "none"
           # This part of the branch operator allows us to map the results of this operation
           # back to the original source message
+          result_map: |
+            root.previous_status = content().string()
 ```
 
 The code is heavily commented, so to understand the processor's configuration in more detail, please read through the comments before proceeding.
 
 ### Writing to the cache
-Awesome! You're performing lookups on the cache now, but if you don't actually write the order statuses to the cache when they come in, the cache resource will always be empty. Therefore, after retrieving the previous status for the current order, you need to make sure to write the current status to the cache. To do this, you can use the `cache` processor.
+Awesome! You're performing lookups on the cache now, but your tests are still failing. Why? Well, if you don't actually write the order statuses to the cache when they come in, the cache resource will always be empty.
+
+Therefore, after retrieving the previous status for the current order, you need to make sure to write the current status to the cache. To do this, you can use the `cache` processor again. This time, you'll use the `set` operator to write to the cache.
 
 Add the following processor to the `pipeline`, right after the `try` / `catch` processors.
 
@@ -541,8 +545,16 @@ Add the following processor to the `pipeline`, right after the `try` / `catch` p
       value: '${! json("order_status") }'
 ```
 
+Now, your tests should pass.
+
+```sh
+rpk connect test /etc/redpanda/connect.yaml
+```
+
 ### Notifying customers
-There are different ways to notify customers, and full exploration of each option is beyond the scope of this tutorial. However, one approach is to use event-driven microservices, invoking an HTTP request to a dedicated notification service. For example, you could use the `http` processor to issue a `POST` request, as follows.
+Your cache is working, which means your application can now tell if the status of an order has changed. The next step is to notify the customers whenever an order is updated.
+
+There are different ways to notify customers, and full exploration of each option is beyond the scope of this tutorial. However, one approach is to make an HTTP request to a dedicated notification service. For example, you could use the `http` processor to issue a `POST` request, as follows.
 
 ```yaml
       # Perform an action if the status has changed
@@ -563,7 +575,9 @@ There are different ways to notify customers, and full exploration of each optio
                   }
 ```
 
-For the purpose of this tutorial, however, we will use the `log` operator to simply print a message each time a customer should be notified. To achieve this, add the following line to your `pipeline` config"
+For the purpose of this tutorial, however, we will use the `log` operator to simply print a message each time a customer should be notified. This allows us to build the rest of the application without focusing on the implementation details of a separate HTTP service.
+
+To achieve this, add the following line to your `pipeline` config"
 
 ```yaml
   - branch:
@@ -572,182 +586,12 @@ For the purpose of this tutorial, however, we will use the `log` operator to sim
         - log:
             level: INFO
             message: |
-              Send customer update: ${! json("customer_id") }
-              New Status: ${! json("order_status") }
-```
-The full file should now look like this:
-
-```yaml
-input:
-  sql_select:
-    driver: postgres
-    dsn: postgres://root:secret@postgres:5432/root?sslmode=disable
-    table: orders
-    columns: [ '*' ]
-
-# add the pipeline
-pipeline:
-  processors:
-    - for_each:
-      - bloblang: |
-          root = {}
-          root.customer_id = this.customer_id
-          root.order_id = this.order_id
-          root.order_status = this.order_status
-          root.previous_status = this.previous_status
-          root.details = this.details
-
-      # Retrieve the previous status from the cache
-      - branch:
-          processors:
-            # Since cache misses are logged as errors, wrap the cache.get operation in a try/catch
-            # to reduce error log noise
-            - try:
-              - cache:
-                  # lookup the previous status for this order_id in our order_cache resource,
-                  # which is an in-memory map. The in-memory map can be replaced with Redis
-                  # or more durable storage in production
-                  resource: order_cache
-                  operator: get
-                  key: '${! json("order_id") }'
-            - catch:
-              # If the order_id isn't in the cache, set the previous status to "none"
-              - mapping: |
-                  "none"
-          # This part of the branch operator allows us to map the results of this operation
-          # back to the original source message
-          result_map: |
-            root.previous_status = content().string()
-    
-      # Update the cache with the latest order status
-      - cache:
-          resource: order_cache
-          operator: set
-          key: '${! json("order_id") }'
-          value: '${! json("order_status") }'
-
-      # detect if status changed
-      - bloblang: |
-          root = this
-          root.status_changed = if this.previous_status != this.order_status {
-            true
-          } else {
-            false
-          }
-
-      # Perform an action if the status has changed
-      - branch:
-          request_map: 'if this.previous_status != this.order_status { this }'
-          processors:
-            - log:
-                level: INFO
-                message: |
-                  Send customer update: ${! json("customer_id") }
-                  New Status: ${! json("order_status") }
-
-            # - http:
-            #     url: "http://localhost:8787/api/status-change"
-            #     method: POST
-            #     headers:
-            #       Content-Type: application/json
-            #     payload: |
-            #       {
-            #         "customer_id": this.customer_id,
-            #         "order_id": this.order_id,
-            #         "previous_status": this.previous_status,
-            #         "new_status": this.order_status
-            #       }
-
-output:
-  label: "redpanda"
-  kafka:
-    addresses: [ 'redpanda-1:9092']
-    topic: orders
-    key: '${! json("customer_id") }'
-
-cache_resources:
-  - label: order_cache
-    memory:
-      default_ttl: 60s
-
-tests:
-  - name: test record scrubbing
-    environment: {}
-    input_batch:
-      - content: |
-          {
-            "created_at": "2024-12-12T17:25:52.724229Z",
-            "customer_address": "456 Oak Ave",
-            "customer_id": 2,
-            "customer_name": "Jane Smith",
-            "details": "1 pepperoni pizza, 1 veggie pizza",
-            "order_id": 2,
-            "order_status": "pending"
-          }
-      - content: |
-          {
-            "created_at": "2024-12-12T17:25:52.724229Z",
-            "customer_address": "456 Oak Ave",
-            "customer_id": 2,
-            "customer_name": "Jane Smith",
-            "details": "1 pepperoni pizza, 1 veggie pizza",
-            "order_id": 2,
-            "order_status": "pending"
-          }
-      - content: |
-          {
-            "created_at": "2024-12-12T17:25:52.724229Z",
-            "customer_address": "456 Oak Ave",
-            "customer_id": 2,
-            "customer_name": "Jane Smith",
-            "details": "1 pepperoni pizza, 1 veggie pizza",
-            "order_id": 2,
-            "order_status": "delivered"
-          }
-    output_batches:
-      -
-        - json_equals: |
-            {
-              "customer_id": 2,
-              "details": "1 pepperoni pizza, 1 veggie pizza",
-              "order_id": 2,
-              "order_status": "pending",
-              "previous_status": "none",
-              "status_changed": true
-            }
-        - json_equals: |
-            {
-              "customer_id": 2,
-              "details": "1 pepperoni pizza, 1 veggie pizza",
-              "order_id": 2,
-              "order_status": "pending",
-              "previous_status": "pending",
-              "status_changed": false
-            }
-        - json_equals: |
-            {
-              "customer_id": 2,
-              "details": "1 pepperoni pizza, 1 veggie pizza",
-              "order_id": 2,
-              "order_status": "delivered",
-              "previous_status": "pending",
-              "status_changed": true
-            }
+              Let customer ${! json("customer_id") } know their order is now: ${! json("order_status") }
 ```
 
-If you run the tests again:
+<sub>See connect-8.yaml for the full file.</sub>
 
-```sh
-rpk connect test /etc/redpanda/connect.yaml
-```
-
-You should see that they succeed:
-
-```sh
-Test '/etc/redpanda/connect.yaml' succeeded
-```
-
-You can also re-run the pipeline with the following command:
+If you re-run the pipeline with the following command:
 
 ```sh
 rpk connect run /etc/redpanda/connect.yaml
@@ -756,40 +600,38 @@ rpk connect run /etc/redpanda/connect.yaml
 You should see several logs like the following:
 
 ```sh
-INFO Let customer 2 know their order is now: delivered
+INFO Let customer 1 know their order is now: baking
+INFO Let customer 2 know their order is now: delivering
 INFO Let customer 4 know their order is now: pending
 INFO Let customer 3 know their order is now: preparing
-INFO Let customer 1 know their order is now: pending
 INFO Let customer 5 know their order is now: delivered
 ```
 
-### Bonus
-In this bonus section, we'll go a little bit deeper to introduce you to secrets and also the OpenAI processors. It will require an OpenAI API key, which you can create [here](https://platform.openai.com/api-keys). However, if you don't want to create an API key, feel free to skip this section.
+### Personalization and AI (Bonus)
+In this bonus section, we'll go a little bit deeper to introduce you to `secrets` and also some of the AI processors. It will require an OpenAI API key, which you can create [here](https://platform.openai.com/api-keys). However, if you don't want to create an API key, feel free to skim through or skip this section.
 
-Our goal in this section is to add some personalization to the system. Specifically, you'll use the OpenAI chat completion processor to create personalized notifications for your customers when their order status changes.
+Your goal in this section is to add some personalization to the notifications. Specifically, you'll use the OpenAI chat completion processor to create personalized notifications for your customers when their order status changes.
 
-The simplest way to do this is to add the `openai_chat_completion` processor to your pipeline, like so:
+The simplest way to do this is to add the `openai_chat_completion` processor to your pipeline. Replace the log processor from the last section with the following:
 
 ```yaml
-input:
-  sql_select:
-    driver: postgres
-    dsn: postgres://root:secret@postgres:5432/root?sslmode=disable
-    table: orders
-    columns: [ '*' ]
-
-# add the pipeline
 pipeline:
   processors:
+      ...
+
+      # Add some personalization
       - label: openai
         branch:
           request_map: 'if this.previous_status != this.order_status && this.previous_order.status != "none" { this }'
           processors:
             - try:
-              -   openai_chat_completion:
+                # Use an external AI model to add personalization our notications
+                -   openai_chat_completion:
                     server_address: https://api.openai.com/v1
                     api_key: "${OPENAI_API_KEY}"
                     model: gpt-4o
+                    # Feel free to adjust this prompt in fun ways. Maybe provide a fun persona
+                    # for OpenAI to use when generating text?
                     system_prompt: |
                       Our customer just ordered some food and the order status just changed
                       from to ${! json(this.order_status)}. Please create a personalized message
@@ -819,11 +661,14 @@ If you look closely at the `api_key` configuration, you'll see a placeholder:
 api_key="${OPENAI_API_KEY}"
 ```
 
-You could add your [OpenAI API key](https://platform.openai.com/api-keys) or other sensitive information directly to your configuration files, but that's not a secure practice. Instead, the syntax we're using (`${ENV_VAR_NAME}`) tells Redpanda Connect to inject that value from the environment. To run this pipeline now with the current environment variable, execute the following command:
+You could add your [OpenAI API key](https://platform.openai.com/api-keys) or other sensitive information directly to your configuration files, but that's not a secure practice. Instead, the syntax we're using (`${ENV_VAR_NAME}`) tells Redpanda Connect to inject that value from the environment.
 
+
+To run this pipeline now with the current environment variable, execute the following command:
 
 ```sh
-docker exec -e OPENAI_API_KEY=YOUR_KEY -ti redpanda-1 \
+export OPENAI_API_KEY=...
+docker exec -e OPENAI_API_KEY=$OPENAI_API_KEY -ti redpanda-1 \
   rpk connect run /etc/redpanda/connect.yaml
 ```
 
@@ -839,17 +684,18 @@ You'll see personalized messages like the following:
 {
   "customer_id": 1,
   "details": "2 cheese pizzas, 1 garlic bread",
-  "message": "Hey there, Pizza Enthusiast Extraordinaire!\n\nGreat news: your cheesy dreams are in the oven! Your order of 2 cheese pizzas and 1 garlic bread is now pending, which means the countdown to that delightful cheesy goodness and garlicky aroma has officially begun. Keep your taste buds on standby — your treat is on its way to being served!\n\nStay saucy! 🍕🧄",
+  "message": "Greetings, Pizza Connoisseur! Your cheesy dreams have just come true 🍕"
+             "Your 4 cheese pizzas and 2 sodas have been delivered",
   "order_id": 1,
-  "order_status": "pending",
+  "order_status": "delivered",
   "previous_status": "none"
 }
 ```
 
-That's amazing. The tests will need to be updated to add the new `message` field, but we'll leave that as an ecercise for the reader.
+That's amazing. Your new AI-powered pizza is now positioned for success. You can finally start making those BBQ chicken pizzas you love so much, or just go find and investor to dump $15M into your new AI pizza start up :)
 
 ### Summary
 We've barely scratched the surface of what you can do in Redpanda Connect, but the workflows for adding inputs, outputs, and processors, as well as running unit tests, adding cache resources, and independent branch operations to access the cache, will provide a good foundation for you to continue exploring Redpanda Connect.
 
-Before you close this tutorial, we encourage to take a look at the [other processors](https://docs.redpanda.com/redpanda-connect/components/processors/about/) and pipeline building resources in the official documentation. Perhaps add a new operator to challenge your knowledge and get some self-guided experience. We also have an extended Bonus section coming up next, which contains an example of adding personalized status updates using an OpenAI operator.
+Before you close this tutorial, we encourage to take a look at the [other processors](https://docs.redpanda.com/redpanda-connect/components/processors/about/) and pipeline building resources in the official documentation. Perhaps add a new operator to challenge your knowledge and get some self-guided experience. Until next time, keep learning and have fun with Redpanda.
 
